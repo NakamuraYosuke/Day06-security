@@ -90,3 +90,292 @@ metadata:
   uid: 19418d5f-6593-11e7-a221-52540000fa0a
 ```
 
+## 演習
+`secure-secrets`という名前のnamespaceを作成し切り替えます。
+
+```
+$ kubectl config use-context crc-developer
+$ kubectl create ns secure-secrets
+$ kubectl config set-context crc-developer --namespace=secure-secrets
+```
+
+MySQLのアカウント情報を含むシークレットファイルを作成します。
+
+userにmyuserを、passwordにredhat123を、databaseにtest_secretsを、hostnameにmysqlを設定します。
+
+```
+$ kubectl create secret generic mysql \
+--from-literal user=myuser \
+--from-literal password=redhat123 \
+--from-literal database=test_secrets \
+--from-literal hostname=mysql
+```
+
+MySQLを作成するdeploymentファイル（`mysql-deployment.yaml`）を作成し、applyします。
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  selector:
+    matchLabels:
+      deployment: mysql
+  template:
+    metadata:
+      labels:
+        deployment: mysql
+    spec:
+      containers:
+      - env:
+        image: registry.access.redhat.com/rhscl/mysql-57-rhel7:5.7-47
+        name: mysql
+```
+
+```
+$ kubectl apply -f mysql-deployment.yaml
+```
+
+Podのステータスを確認します。
+```
+$ kubectl get pods -w
+NAME                    READY   STATUS             RESTARTS   AGE
+mysql-d9cddc8f6-f9xv2   0/1     CrashLoopBackOff   1          7s
+```
+
+`CrashLoopBackOff`となり、Podの作成に失敗します。
+Deploymentに MYSQL_USER、MYSQL＿PASSWORD、MYSQL_DATABASEなどの環境変数を設定していないためです。
+
+以下の内容の`mysql-secret-deployment.yaml`を作成しapplyます。
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  selector:
+    matchLabels:
+      deployment: mysql
+  template:
+    metadata:
+      labels:
+        deployment: mysql
+    spec:
+      containers:
+      - env:
+        - name: MYSQL_HOSTNAME
+          valueFrom:
+            secretKeyRef:
+              key: hostname
+              name: mysql
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: mysql
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              key: user
+              name: mysql
+        - name: MYSQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              key: database
+              name: mysql
+        image: registry.access.redhat.com/rhscl/mysql-57-rhel7:5.7-47
+        name: mysql
+```
+
+```
+$ kubectl apply -f mysql-secret-deployment.yaml
+```
+Podのステータスを確認します。
+```
+$ kubectl get pods -w
+NAME                     READY   STATUS              RESTARTS   AGE
+mysql-6ddbc5566f-f7xzn   0/1     ContainerCreating   0          3s
+mysql-6ddbc5566f-f7xzn   1/1     Running             0          4s
+```
+
+`Running`となっていることを確認します。
+
+作成したMySQLのPodにログインします。
+```
+$ kubectl exec -it mysql-6ddbc5566f-f7xzn /bin/bash
+```
+
+シークレットに登録したユーザ、パスワード、データベース名でログインを試みます。
+
+```
+bash-4.2$ mysql -umyuser -predhat123 test_secrets -e 'show databases;'
+```
+
+次に`quotes`というアプリケーションを用いてMySQLのシークレット情報を表示します。
+
+以下の内容の`quotes-deployment.yaml`を作成しapplyします。
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quotes
+spec:
+  selector:
+    matchLabels:
+      deployment: quotes
+  template:
+    metadata:
+      labels:
+        deployment: quotes
+    spec:
+      containers:
+      - env:
+        - name: QUOTES_DATABASE
+          valueFrom:
+            secretKeyRef:
+              key: database
+              name: mysql
+        - name: QUOTES_HOSTNAME
+          valueFrom:
+            secretKeyRef:
+              key: hostname
+              name: mysql
+        - name: QUOTES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: mysql
+        - name: QUOTES_USER
+          valueFrom:
+            secretKeyRef:
+              key: user
+              name: mysql
+        image: nakanakau/famous-quotes:1.0
+        name: quotes
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+```
+
+```
+$ kubectl apply -f quotes-deployment.yaml
+```
+
+Podの状態を確認します。
+```
+$ kubectl get pod -w
+NAME                      READY   STATUS    RESTARTS   AGE
+mysql-6ddbc5566f-4c2ck    1/1     Running   0          20m
+quotes-5b649bb4f4-khlwx   0/1     Error     0          4s
+```
+
+`quotes`のPodが`Error`となり失敗しています。ログを確認します。
+```
+$ kubectl logs -f quotes-5b649bb4f4-khlwx
+2021/04/04 16:14:26 Connecting to the database: myuser:redhat123@tcp(mysql:3306)/test_secrets
+2021/04/04 16:14:27 Database connection error: dial tcp: lookup mysql on 10.217.4.10:53: no such host
+```
+
+MySQL Databaseへの接続に失敗しています。
+
+これはMySQLのServiceを作成していないためです。
+
+MySQLのServiceを`mysql-service.yaml`という名前で作成しapplyします。
+```
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: mysql
+  name: mysql
+  namespace: secure-secrets
+spec:
+  ports:
+  - name: 3306-tcp
+    port: 3306
+    protocol: TCP
+    targetPort: 3306
+  selector:
+    deployment: mysql
+  type: NodePort
+```
+
+```
+$ kubectl apply -f mysql-service.yaml
+```
+
+`quotes`のDeploymentを削除し再度applyします。
+```
+$ kubectl delete deployment quotes
+$ kubectl apply -f quotes-deployment.yaml
+```
+
+再度Podの状態を確認します。
+```
+$ kubectl get pod -w
+NAME                      READY   STATUS    RESTARTS   AGE
+mysql-6ddbc5566f-4c2ck    1/1     Running   0          27m
+quotes-5b649bb4f4-qnhlq   1/1     Running   0          2m28s
+```
+
+次にquotesのアプリケーションに対するServiceも`quotes-service.yaml`という名前で作成しapplyします。
+```
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: quotes
+  name: quotes
+  namespace: secure-secrets
+spec:
+  ports:
+  - name: 8000-tcp
+    port: 8000
+    protocol: TCP
+    targetPort: 8000
+  selector:
+    deployment: quotes
+  type: NodePort
+```
+
+```
+$ kubectl apply -f quotes-service.yaml
+```
+
+作成したquotesのServiceを確認します。
+```
+$ kubectl get svc quotes
+NAME     TYPE       CLUSTER-IP    EXTERNAL-IP   PORT(S)          AGE
+quotes   NodePort   10.217.4.31   <none>        8000:30121/TCP   6s
+```
+
+quotesアプリケーションにアクセスします。
+`192.168.64.2`はCRCのIPアドレスとなります。
+```
+$ curl http://192.168.64.2:30121/status
+Database connection OK
+```
+
+```
+$ curl http://192.168.64.2:30121/env
+<html>
+	<head>
+        <title>Quotes</title>
+    </head>
+    <body>
+       
+        <h1>Quote List</h1>
+        
+            <h3>Database Environment Variables</h3>
+            <ul>
+                <li>QUOTES_USER: myuser </li>
+                <li>QUOTES_PASSWORD: redhat123 </li>
+                <li>QUOTES_DATABASE: test_secrets</li>
+                <li>QUOTES_HOST: mysql</li>
+            </ul>
+        
+    </body>
+</html>
+```
+
+MySQLへの接続も正常に行われ、シークレットに設定した情報も確認できました。

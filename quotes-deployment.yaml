@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quotes
+spec:
+  selector:
+    matchLabels:
+      deployment: quotes
+  template:
+    metadata:
+      labels:
+        deployment: quotes
+    spec:
+      containers:
+      - env:
+        - name: QUOTES_DATABASE
+          valueFrom:
+            secretKeyRef:
+              key: database
+              name: mysql
+        - name: QUOTES_HOSTNAME
+          valueFrom:
+            secretKeyRef:
+              key: hostname
+              name: mysql
+        - name: QUOTES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: mysql
+        - name: QUOTES_USER
+          valueFrom:
+            secretKeyRef:
+              key: user
+              name: mysql
+        image: nakanakau/famous-quotes:1.0
+        name: quotes
+        ports:
+        - containerPort: 8000
+          protocol: TCP
