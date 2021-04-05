@@ -26,6 +26,63 @@ $ kubectl create secret generic secret_name \
 --from-literal=key2=secret2
 ```
 
+#### シークレットの分類
+一口にSecretといっても、いくつかのタイプに分けられています。通常のパスワードなどはGeneric用の「type: Opeque」を利用します。
+
+他にも、Ingressなどで参照可能なTLS用のSecretや、Docker Registryへの認証情報用のSecretなどもあります。
+
+また、手動で作ることはありませんが、PodにService AccountのTokenをマウントするための、「type: kubernetes.io/service-account-token」のSecretも存在します。
+
+- Generic（type: Opaque）
+- TLS（type: kubernetes.io/tls）
+- Docker Registry（type: kubernetes.io/dockerconfigjson）
+- Service Account（type: kubernetes.io/service-account-token）
+
+
+#### Genericタイプのシークレット
+一般的なフリースキーマのSecretを作成する場合は、genericを指定します。作成方法は下記の4パターンがあります。
+
+- ファイルから作成する（--from-file）
+- yamlファイルから作成する
+- kubectlから直接作成する（--from-literal）
+- envfileから作成する
+
+Secretでは、Secretの名前の中に、複数のKey-Value値が保存されます。
+
+例えば、Databaseの認証情報を作成する場合、Secret名はdb-auth、Keyはusername、passwordの2種類となります。
+
+もちろん、Kubernetesクラスタ内で複数のDBを作成する場合もあると思うので、その場合はSecret名をユニークとなるように定義するか、システムごとにNamespaceを分割する必要があります。
+
+#### TLSタイプのシークレット
+証明書として利用するSecretを作成する場合は、tlsを指定します。
+
+TLSタイプのSecretはIngressリソースなどから利用することが一般的です。
+
+TLSタイプの場合には、基本的にファイルから作成することが望ましいです。
+
+```
+（例）
+# 証明書の作成
+$ openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /tmp/tls.key -out /tmp/tls.crt -subj "/CN=sample1.example.com"
+ 
+# TLS Secret の作成
+$ kubectl create secret tls tls-sample --key /tmp/tls.key --cert /tmp/tls.crt
+```
+
+#### Docker Registryタイプのシークレット
+Docker RegistryタイプのSecretを作成する場合は、docker-registryを指定します。
+
+kubectlから作成する際には、Registryサーバと認証情報を引数で指定します。
+```
+（例）
+kubectl create secret docker-registry sample-registry-auth \
+  --docker-server=REGISTRY_SERVER \
+  --docker-username=REGISTRY_USER \
+  --docker-password=REGISTRY_USER_PASSWORD \
+  --docker-email=REGISTRY_USER_EMAIL
+```
+
+
 #### シークレットをポッドに公開する方法
 シークレットは、データボリュームとしてマウント、または環境変数として公開し、ポッドのコンテナーから使用できます。
 
